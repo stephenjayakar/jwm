@@ -88,7 +88,12 @@ final class Picker: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSText
         self.completion = completion
         field.stringValue = ""
         refilter()
-        panel.center()
+        if let screen = WM.shared.currentScreen?.visibleFrame {
+            let size = panel.frame.size
+            panel.setFrameOrigin(CGPoint(x: screen.midX - size.width / 2, y: screen.minY + screen.height * 0.6 - size.height / 2))
+        } else {
+            panel.center()
+        }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(field)

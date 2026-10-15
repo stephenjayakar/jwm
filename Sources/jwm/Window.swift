@@ -9,6 +9,8 @@ final class Window {
     let appName: String
     /// True while parked offscreen by us.
     var parked = false
+    /// Where we parked it; parked again when the park corner moves (displays rearranged).
+    var parkedAt: CGPoint?
     /// Where the current layout puts this window; nil while parked.
     var expected: CGRect?
     /// Last time we pushed the window back, and how many times in a row; used to stop fighting
@@ -51,6 +53,11 @@ final class Window {
             && element.isSettable(kAXSizeAttribute)
     }
 
+    /// The parts of isManageable() that can change after a window was first seen.
+    static func isStillManageable(_ element: AXUIElement) -> Bool {
+        element.bool(kAXMinimizedAttribute) != true && element.bool("AXFullScreen") != true
+    }
+
     func setFrame(_ rect: CGRect) {
         // Chrome/Electron animate frame changes while enhanced UI is on, which breaks resizing.
         let enhanced = app.bool("AXEnhancedUserInterface") == true
@@ -65,18 +72,24 @@ final class Window {
         ownChangeUntil = Date().addingTimeInterval(0.4)
     }
 
-    /// Moves the window so only its top-left pixel sits in the bottom-right corner of `screen`.
-    func park(in screen: CGRect) {
-        element.setPosition(CGPoint(x: screen.maxX - 1, y: screen.maxY - 1))
+    /// Moves the window's top-left corner to `point` (WM.parkPoint picks a display corner with no
+    /// other display beyond it, so only a 1px sliver stays on screen).
+    func park(at point: CGPoint) {
+        element.setPosition(point)
+        parkedAt = point
         parked = true
         expected = nil
         ownChangeUntil = Date().addingTimeInterval(0.4)
     }
 
+    /// Activates the app first, then makes this window its key window. In the other order,
+    /// activating the app brings back the app's previous key window (with two kitty windows, the
+    /// wrong one ends up focused).
     func focus() {
+        app.set(kAXFrontmostAttribute, kCFBooleanTrue)
+        app.set(kAXFocusedWindowAttribute, element)
         element.set(kAXMainAttribute, kCFBooleanTrue)
         element.perform(kAXRaiseAction)
-        app.set(kAXFrontmostAttribute, kCFBooleanTrue)
     }
 
     func close() {

@@ -89,7 +89,7 @@ final class Hud {
         generation += 1
         label.stringValue = text
         let size = CGSize(width: label.intrinsicContentSize.width + 32, height: 36)
-        let screen = NSScreen.screens.first?.visibleFrame ?? .zero
+        let screen = (WM.shared.currentScreen ?? NSScreen.screens.first)?.visibleFrame ?? .zero
         panel.setFrame(CGRect(x: screen.midX - size.width / 2, y: screen.minY + 48,
                               width: size.width, height: size.height), display: true)
         panel.orderFrontRegardless()
@@ -154,7 +154,7 @@ final class StatusBar: NSObject, NSMenuDelegate {
 
     @objc private func relayout() {
         WM.shared.refresh()
-        WM.shared.layout()
+        WM.shared.forceLayout()
     }
 
     @objc private func quit() { NSApp.terminate(nil) }

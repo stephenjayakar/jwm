@@ -79,6 +79,9 @@ final class Tab {
     var root: Node
     var focused: Pane
     var zoomed: Pane?
+    /// UUID of the display this tab belonged to before that display disconnected. The tab goes back
+    /// to it when it reconnects.
+    var origin: String?
 
     init() {
         let pane = Pane()
@@ -216,6 +219,31 @@ final class Tab {
         return true
     }
 
+    /// Moves `pane` to one side of the whole tab (Raycast "left half" and similar), taking `ratio` of it.
+    /// `vertical`: left/right (true) or top/bottom (false). `first`: left or top.
+    /// The rest of the tree keeps its shape on the other side. A pane outside the tree (new) docks next
+    /// to the whole tree. A lone root pane gets `partner` next to it.
+    func dock(_ pane: Pane, vertical: Bool, first: Bool, ratio: CGFloat, partner: () -> Pane) {
+        zoomed = nil
+        let rest: Node
+        if pane.parent != nil {
+            _ = delete(pane)
+            rest = root
+        } else if pane !== root {
+            rest = root
+        } else {
+            rest = partner()
+        }
+        let split = first ? Split(vertical: vertical, a: pane, b: rest) : Split(vertical: vertical, a: rest, b: pane)
+        let r = min(0.9, max(0.1, ratio))
+        split.ratio = first ? r : 1 - r
+        root = split
+        split.parent = nil
+        pane.parent = split
+        rest.parent = split
+        focused = pane
+    }
+
     /// Grows (positive) or shrinks the focused pane within its parent split.
     func resizeFocused(by delta: CGFloat) {
         guard let parent = focused.parent else { return }
@@ -239,4 +267,52 @@ final class Tab {
         }
         walk(root)
     }
+}
+
+/// Builds a split tree that matches where windows already are, so starting jwm moves them as
+/// little as possible. `windows` is front to back. Recursively finds a vertical or horizontal
+/// line that no window crosses (within `tolerance`) and splits there. When windows overlap so
+/// that no such line exists, the backmost one is dropped. Returns nil for no windows.
+func inferLayout(_ windows: [(id: CGWindowID, frame: CGRect)], in region: CGRect, tolerance: CGFloat) -> Node? {
+    guard let front = windows.first else { return nil }
+    if windows.count == 1 {
+        let pane = Pane()
+        pane.show(front.id)
+        return pane
+    }
+    struct Cut { let vertical: Bool; let at: CGFloat; let a: [Int]; let b: [Int]; let overlap: CGFloat }
+    var best: Cut?
+    for vertical in [true, false] {
+        let lo = { (r: CGRect) in vertical ? r.minX : r.minY }
+        let hi = { (r: CGRect) in vertical ? r.maxX : r.maxY }
+        let order = windows.indices.sorted { lo(windows[$0].frame) + hi(windows[$0].frame) < lo(windows[$1].frame) + hi(windows[$1].frame) }
+        for k in 1..<order.count {
+            let a = Array(order[..<k]), b = Array(order[k...])
+            let aEnd = a.map { hi(windows[$0].frame) }.max()!, bStart = b.map { lo(windows[$0].frame) }.min()!
+            let overlap = aEnd - bStart
+            guard overlap <= tolerance, best == nil || overlap < best!.overlap else { continue }
+            best = Cut(vertical: vertical, at: (aEnd + bStart) / 2, a: a, b: b, overlap: overlap)
+        }
+    }
+    guard let cut = best else {
+        return inferLayout(Array(windows.dropLast()), in: region, tolerance: tolerance)
+    }
+    let length = cut.vertical ? region.width : region.height
+    let start = cut.vertical ? region.minX : region.minY
+    let ratio = min(0.9, max(0.1, (cut.at - start) / max(1, length)))
+    let first = cut.vertical
+        ? CGRect(x: region.minX, y: region.minY, width: length * ratio, height: region.height)
+        : CGRect(x: region.minX, y: region.minY, width: region.width, height: length * ratio)
+    let second = cut.vertical
+        ? CGRect(x: first.maxX, y: region.minY, width: region.width - first.width, height: region.height)
+        : CGRect(x: region.minX, y: first.maxY, width: region.width, height: region.height - first.height)
+    // Keep front-to-back order inside each side, so overlap drops still pick the backmost window.
+    let side = { (idx: [Int]) in idx.sorted().map { windows[$0] } }
+    guard let a = inferLayout(side(cut.a), in: first, tolerance: tolerance),
+          let b = inferLayout(side(cut.b), in: second, tolerance: tolerance) else { return nil }
+    let split = Split(vertical: cut.vertical, a: a, b: b)
+    split.ratio = ratio
+    a.parent = split
+    b.parent = split
+    return split
 }

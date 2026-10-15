@@ -14,6 +14,14 @@ private func CGSGetActiveSpace(_ connection: Int32) -> UInt64
 /// ID of the macOS Space (desktop) currently shown. Private API, as used by yabai/AeroSpace.
 func activeSpace() -> UInt64 { CGSGetActiveSpace(CGSMainConnectionID()) }
 
+@_silgen_name("CGSManagedDisplayGetCurrentSpace")
+private func CGSManagedDisplayGetCurrentSpace(_ connection: Int32, _ display: CFString) -> UInt64
+
+/// ID of the Space shown on one display (each display has its own Spaces by default).
+func currentSpace(display uuid: String) -> UInt64 {
+    CGSManagedDisplayGetCurrentSpace(CGSMainConnectionID(), uuid as CFString)
+}
+
 extension AXUIElement {
     func value(_ attribute: String) -> CFTypeRef? {
         var value: CFTypeRef?

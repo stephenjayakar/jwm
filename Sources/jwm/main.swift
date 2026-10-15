@@ -20,17 +20,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.begin()
             }
         }
-        // Put parked windows back if we're killed from the terminal.
+        // Put parked windows back if we're killed from the terminal. SIGHUP is a restart (make restart):
+        // windows stay where they are, and the next jwm adopts them as they are.
         for sig in [SIGINT, SIGTERM, SIGHUP] {
             signal(sig, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-            source.setEventHandler { NSApp.terminate(nil) }
+            source.setEventHandler {
+                if sig == SIGHUP { WM.shared.keepWindowsOnQuit = true }
+                NSApp.terminate(nil)
+            }
             source.resume()
             signalSources.append(source)
         }
     }
 
     private func begin() {
+        // Every AX call blocks until the app answers. The default timeout is 6 s, so one hung app
+        // could freeze jwm; this caps every element, including windows, at 0.25 s.
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.25)
         let usr1 = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
         signal(SIGUSR1, SIG_IGN)
         usr1.setEventHandler { print(WM.shared.dump()); fflush(stdout) }
@@ -51,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         WM.shared.saveState()
-        WM.shared.restoreAll()
+        if !WM.shared.keepWindowsOnQuit { WM.shared.restoreAll() }
     }
 }
 

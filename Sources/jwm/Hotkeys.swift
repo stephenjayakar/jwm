@@ -14,6 +14,17 @@ final class Hotkeys {
     /// Key-ups whose key-downs we swallowed.
     private var swallowedUps = Set<Int>()
 
+    /// Apps that get C-v / M-v unchanged, because the program inside already uses them
+    /// (Emacs and terminal apps, where jemacs, shells and readline see the keys).
+    private static let scrollPassthrough: Set<String> = [
+        "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "org.alacritty",
+        "net.kovidgoyal.kitty", "com.github.wez.wezterm", "dev.warp.Warp-Stable", "org.gnu.Emacs",
+        "org.gnu.AquamacsEmacs", "com.vmware.fusion",
+    ]
+    /// Bundle ID of the frontmost app. Written on main, read on the tap thread.
+    private var frontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+    private let frontmostLock = NSLock()
+
     func start() -> Bool {
         let mask = CGEventMask(1 << CGEventType.keyDown.rawValue | 1 << CGEventType.keyUp.rawValue)
         guard let tap = CGEvent.tapCreate(
@@ -23,6 +34,14 @@ final class Hotkeys {
             userInfo: nil
         ) else { return false }
         self.tap = tap
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            self.frontmostLock.lock()
+            self.frontmostBundleID = app?.bundleIdentifier
+            self.frontmostLock.unlock()
+        }
         // The tap gets its own thread: if it ran on the main thread, slow AX calls there could delay
         // it past the system's timeout, which disables the tap and lets keys through to apps.
         // All state in handle() is only touched on this thread; real work is sent to main.
@@ -74,12 +93,38 @@ final class Hotkeys {
             DispatchQueue.main.async { Hud.shared.show("⌘D –") }
             return nil
         }
+        // Emacs scrolling: C-v pages down, M-v (Option-V) pages up.
+        if key == kVK_ANSI_V && ctrl != opt && !cmd && !shift && scrollRemapApplies() {
+            swallowedUps.insert(key)
+            post(ctrl ? kVK_PageDown : kVK_PageUp)
+            return nil
+        }
         if key == kVK_Tab && opt && !cmd && !ctrl {
             swallowedUps.insert(key)
             DispatchQueue.main.async { WM.shared.focusPane(shift ? -1 : 1) }
             return nil
         }
         return pass
+    }
+
+    private func scrollRemapApplies() -> Bool {
+        frontmostLock.lock()
+        defer { frontmostLock.unlock() }
+        guard let id = frontmostBundleID else { return true }
+        return !Hotkeys.scrollPassthrough.contains(id)
+    }
+
+    /// Posts a key press with no modifiers. A private event source keeps the physically held
+    /// Control/Option out of the event.
+    private func post(_ keyCode: Int) {
+        let source = CGEventSource(stateID: .privateState)
+        for down in [true, false] {
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(keyCode), keyDown: down)
+            else { continue }
+            event.flags = .maskSecondaryFn   // real Page Up/Down keys carry the fn flag
+            event.setIntegerValueField(.eventSourceUserData, value: Hotkeys.syntheticMarker)
+            event.post(tap: .cghidEventTap)
+        }
     }
 
     /// ⌘D ⌘D sends a real ⌘D to the focused app.
